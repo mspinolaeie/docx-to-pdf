@@ -1,0 +1,13 @@
+# Core dependencies for DOCX to PDF conversion
+
+# Windows + Microsoft Word backend (optional)
+pywin32>=305; sys_platform == 'win32'
+
+# PDF manipulation and metadata injection (optional but recommended)
+pypdf>=3.17.0
+
+# Progress bar visualization (optional but recommended)
+tqdm>=4.66.0
+
+# Note: LibreOffice must be installed separately if not using Word backend
+# Download from: https://www.libreoffice.org/download/download/
