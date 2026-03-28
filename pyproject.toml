@@ -19,6 +19,7 @@ pdf  = ["pypdf>=3.17.0"]
 ui   = ["tqdm>=4.66.0"]
 all  = ["pywin32>=305; sys_platform == 'win32'", "pypdf>=3.17.0", "tqdm>=4.66.0"]
 dev  = ["pytest>=8.0", "pypdf>=3.17.0"]
+build = ["pyinstaller>=6.0", "pyinstaller-hooks-contrib>=2024.0", "pypdf>=3.17.0", "tqdm>=4.66.0", "pywin32>=305"]
 
 [project.scripts]
 docx-to-pdf = "docx_to_pdf:main"
