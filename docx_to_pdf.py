@@ -107,7 +107,11 @@ class ConversionConfig:
     def from_file(cls, config_path: str) -> "ConversionConfig":
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        cfg = cls(**data)
+        known = {f.name for f in dataclasses.fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            get_logger().warning(f"Ignoring unknown config key(s): {', '.join(sorted(unknown))}")
+        cfg = cls(**{k: v for k, v in data.items() if k in known})
         cfg.validate()
         return cfg
 
@@ -360,13 +364,15 @@ def is_word_available() -> bool:
         return False
 
 
-def convert_with_word(
+def _export_with_word_app(
+    word: Any,
     docx_path: str,
     pdf_path: str,
     create_bookmarks: str,
     optimize_for_print: bool,
     pdfa: bool,
 ) -> None:
+    """Export one document using an already-open Word.Application instance."""
     wdExportFormatPDF = 17
     wdExportOptimizeForPrint = 0
     wdExportOptimizeForOnScreen = 1
@@ -385,13 +391,8 @@ def convert_with_word(
     else:
         cb = wdExportCreateNoBookmarks
 
-    word = None
     doc = None
     try:
-        word = win32com.client.Dispatch("Word.Application")
-        word.Visible = False
-        word.DisplayAlerts = 0
-
         get_logger().debug(f"Opening document: {docx_path}")
         doc = word.Documents.Open(docx_path, ReadOnly=True, AddToRecentFiles=False)
         doc.ExportAsFixedFormat(
@@ -400,8 +401,6 @@ def convert_with_word(
             OpenAfterExport=False,
             OptimizeFor=optimize,
             Range=wdExportAllDocument,
-            From=1,
-            To=1,
             Item=wdExportDocumentContent,
             IncludeDocProps=True,
             KeepIRM=True,
@@ -419,6 +418,23 @@ def convert_with_word(
                 doc.Close(False)
         except Exception:
             pass
+
+
+def convert_with_word(
+    docx_path: str,
+    pdf_path: str,
+    create_bookmarks: str,
+    optimize_for_print: bool,
+    pdfa: bool,
+) -> None:
+    """Convert a single file, managing the Word application lifecycle."""
+    word = None
+    try:
+        word = win32com.client.Dispatch("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        _export_with_word_app(word, docx_path, pdf_path, create_bookmarks, optimize_for_print, pdfa)
+    finally:
         try:
             if word:
                 word.Quit()
@@ -467,20 +483,36 @@ def convert_with_libreoffice(docx_path: str, pdf_path: str) -> None:
 # ============================================================================
 
 
-def convert_single_file(docx_path: str, pdf_path: str, backend: str, config: ConversionConfig) -> ConversionResult:
+def convert_single_file(
+    docx_path: str,
+    pdf_path: str,
+    backend: str,
+    config: ConversionConfig,
+    word_app: Optional[Any] = None,
+) -> ConversionResult:
     metadata_injected = False
     validation_passed = False
     try:
         os.makedirs(os.path.dirname(pdf_path) or ".", exist_ok=True)
 
         if backend == "word":
-            convert_with_word(
-                docx_path=docx_path,
-                pdf_path=pdf_path,
-                create_bookmarks=config.bookmarks,
-                optimize_for_print=True,
-                pdfa=config.pdfa,
-            )
+            if word_app is not None:
+                _export_with_word_app(
+                    word_app,
+                    docx_path=docx_path,
+                    pdf_path=pdf_path,
+                    create_bookmarks=config.bookmarks,
+                    optimize_for_print=True,
+                    pdfa=config.pdfa,
+                )
+            else:
+                convert_with_word(
+                    docx_path=docx_path,
+                    pdf_path=pdf_path,
+                    create_bookmarks=config.bookmarks,
+                    optimize_for_print=True,
+                    pdfa=config.pdfa,
+                )
             metadata_injected = True
         elif backend == "libreoffice":
             convert_with_libreoffice(docx_path, pdf_path)
@@ -583,23 +615,40 @@ def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> L
             pbar.close()
         return results
 
-    # Sequential processing
+    # Sequential processing — Word: open one app instance for the whole batch
+    word_app = None
+    if backend == "word" and HAS_PYWIN32:
+        try:
+            word_app = win32com.client.Dispatch("Word.Application")
+            word_app.Visible = False
+            word_app.DisplayAlerts = 0
+            logger.debug(f"Word.Application opened for batch of {len(tasks)} file(s)")
+        except Exception as e:
+            logger.warning(f"Failed to pre-open Word.Application, will open per file: {e}")
+
     iterator: Any = tasks
     pbar2 = None
     if HAS_TQDM:
         pbar2 = tqdm(tasks, desc="Converting", unit="file")
         iterator = pbar2
-    for docx_path, pdf_path in iterator:
-        res = convert_single_file(docx_path, pdf_path, backend, config)
-        results.append(res)
-        rel_path = os.path.relpath(res.docx_path, root)
-        if res.success:
-            logger.info(f"OK   | {rel_path} ({res.backend_used})")
-        else:
-            logger.error(f"FAIL | {rel_path}: {res.error_message}")
-            logger.debug(res.traceback or "")
-    if pbar2 is not None:
-        pbar2.close()
+    try:
+        for docx_path, pdf_path in iterator:
+            res = convert_single_file(docx_path, pdf_path, backend, config, word_app)
+            results.append(res)
+            rel_path = os.path.relpath(res.docx_path, root)
+            if res.success:
+                logger.info(f"OK   | {rel_path} ({res.backend_used})")
+            else:
+                logger.error(f"FAIL | {rel_path}: {res.error_message}")
+                logger.debug(res.traceback or "")
+    finally:
+        if pbar2 is not None:
+            pbar2.close()
+        if word_app is not None:
+            try:
+                word_app.Quit()
+            except Exception:
+                pass
     return results
 
 
