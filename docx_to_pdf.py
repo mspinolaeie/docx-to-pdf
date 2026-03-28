@@ -325,11 +325,15 @@ def validate_pdf(pdf_path: str) -> Tuple[bool, Optional[str]]:
         if not os.path.exists(pdf_path):
             return False, "File does not exist"
 
+        # A minimal valid PDF (empty page, no content streams) is ~67 bytes.
+        # 100 bytes is a safe lower bound that rejects truncated/corrupt output.
+        _MIN_PDF_BYTES = 100
+
         file_size = os.path.getsize(pdf_path)
         if file_size == 0:
             return False, "File is empty (0 bytes)"
-        if file_size < 100:
-            return False, f"File too small ({file_size} bytes)"
+        if file_size < _MIN_PDF_BYTES:
+            return False, f"File too small ({file_size} bytes, minimum {_MIN_PDF_BYTES})"
 
         try:
             from pypdf import PdfReader  # type: ignore
@@ -570,6 +574,15 @@ def resolve_backend(config: ConversionConfig) -> Tuple[str, bool]:
     return backend, word_available
 
 
+def _log_result(res: ConversionResult, root: str, logger: logging.Logger) -> None:
+    rel_path = os.path.relpath(res.docx_path, root)
+    if res.success:
+        logger.info(f"OK   | {rel_path} ({res.backend_used})")
+    else:
+        logger.error(f"FAIL | {rel_path}: {res.error_message}")
+        logger.debug(res.traceback or "")
+
+
 def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> List[ConversionResult]:
     logger = get_logger()
     results: List[ConversionResult] = []
@@ -605,12 +618,7 @@ def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> L
             for fut in as_completed(futures):
                 res = fut.result()
                 results.append(res)
-                rel_path = os.path.relpath(res.docx_path, root)
-                if res.success:
-                    logger.info(f"OK   | {rel_path} ({res.backend_used})")
-                else:
-                    logger.error(f"FAIL | {rel_path}: {res.error_message}")
-                    logger.debug(res.traceback or "")
+                _log_result(res, root, logger)
                 if pbar is not None:
                     pbar.update(1)
         if pbar is not None:
@@ -637,12 +645,7 @@ def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> L
         for docx_path, pdf_path in iterator:
             res = convert_single_file(docx_path, pdf_path, backend, config, word_app)
             results.append(res)
-            rel_path = os.path.relpath(res.docx_path, root)
-            if res.success:
-                logger.info(f"OK   | {rel_path} ({res.backend_used})")
-            else:
-                logger.error(f"FAIL | {rel_path}: {res.error_message}")
-                logger.debug(res.traceback or "")
+            _log_result(res, root, logger)
     finally:
         if pbar2 is not None:
             pbar2.close()

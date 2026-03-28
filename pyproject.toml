@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docx-to-pdf"
+version = "1.0.0"
+description = "Batch DOCX to PDF converter — Word COM + LibreOffice, metadata injection, parallel processing"
+requires-python = ">=3.10"
+readme = "docx_to_pdf README.txt"
+license = { text = "MIT" }
+
+# All runtime deps are optional — the script works with zero pip packages
+dependencies = []
+
+[project.optional-dependencies]
+word = ["pywin32>=305; sys_platform == 'win32'"]
+pdf  = ["pypdf>=3.17.0"]
+ui   = ["tqdm>=4.66.0"]
+all  = ["pywin32>=305; sys_platform == 'win32'", "pypdf>=3.17.0", "tqdm>=4.66.0"]
+dev  = ["pytest>=8.0", "pypdf>=3.17.0"]
+
+[project.scripts]
+docx-to-pdf = "docx_to_pdf:main"
+
+[tool.setuptools]
+py-modules = ["docx_to_pdf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
