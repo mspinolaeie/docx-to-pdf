@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import json
 import logging
 import os
@@ -42,7 +43,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 
 # Optional imports (no hard deps)
@@ -84,8 +85,8 @@ class ConversionConfig:
     recursive: bool = False
     overwrite: bool = False
     pdfa: bool = False
-    bookmarks: str = "headings"
-    backend: str = "auto"
+    bookmarks: Literal["headings", "word", "none"] = "headings"
+    backend: Literal["auto", "word", "libreoffice"] = "auto"
     workers: int = 1
     validate_pdf: bool = True
     log_level: str = "INFO"
@@ -352,6 +353,7 @@ def validate_pdf(pdf_path: str) -> Tuple[bool, Optional[str]]:
 # ============================================================================
 
 
+@functools.lru_cache(maxsize=1)
 def is_word_available() -> bool:
     if not HAS_PYWIN32:
         return False
@@ -830,7 +832,7 @@ def run_gui_mode() -> int:
                 recursive=bool(recursive),
                 overwrite=bool(overwrite),
                 backend="auto",
-                workers=4,
+                workers=min(4, os.cpu_count() or 4),
                 validate_pdf=True,
                 log_level="INFO",
                 log_file=log_file,
@@ -880,7 +882,7 @@ def run_gui_mode() -> int:
             recursive=recursive,
             overwrite=overwrite,
             backend="auto",
-            workers=4,
+            workers=min(4, os.cpu_count() or 4),
             validate_pdf=True,
             log_level="INFO",
             log_file=log_file,
