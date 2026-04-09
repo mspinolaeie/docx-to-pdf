@@ -43,7 +43,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 
 # Optional imports (no hard deps)
@@ -133,6 +133,19 @@ class ConversionResult:
     validation_passed: bool = False
 
 
+@dataclass(frozen=True)
+class ConversionEvent:
+    docx_path: str
+    status: Literal["started", "skipped", "completed"]
+    processed: int
+    total: int
+    message: Optional[str] = None
+    result: Optional["ConversionResult"] = None
+
+
+ProgressCallback = Optional[Callable[[ConversionEvent], None]]
+
+
 # ============================================================================
 # LOGGING
 # ============================================================================
@@ -152,9 +165,13 @@ class ColoredFormatter(logging.Formatter):
     RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        if record.levelname in self.COLORS:
-            record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
-        return super().format(record)
+        original_levelname = record.levelname
+        if original_levelname in self.COLORS:
+            record.levelname = f"{self.COLORS[original_levelname]}{original_levelname}{self.RESET}"
+        try:
+            return super().format(record)
+        finally:
+            record.levelname = original_levelname
 
 
 def get_logger() -> logging.Logger:
@@ -165,16 +182,23 @@ def get_logger() -> logging.Logger:
 get_logger().addHandler(logging.NullHandler())
 
 
-def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
+def setup_logging(
+    log_level: str = "INFO",
+    log_file: Optional[str] = None,
+    *,
+    console: bool = True,
+    extra_handlers: Optional[Sequence[logging.Handler]] = None,
+) -> logging.Logger:
     logger = get_logger()
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     logger.handlers.clear()
     logger.propagate = False
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(ColoredFormatter("%(levelname)-8s | %(message)s"))
-    logger.addHandler(console_handler)
+    if console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(ColoredFormatter("%(levelname)-8s | %(message)s"))
+        logger.addHandler(console_handler)
 
     if log_file:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
@@ -186,6 +210,9 @@ def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> lo
             )
         )
         logger.addHandler(file_handler)
+
+    for handler in extra_handlers or ():
+        logger.addHandler(handler)
 
     return logger
 
@@ -220,6 +247,69 @@ def find_docx_files(root: str, recursive: bool) -> List[str]:
 
     get_logger().info(f"Found {len(files)} DOCX file(s) in {root}")
     return sorted(files)
+
+
+def collect_docx_inputs(paths: Sequence[str], recursive: bool = False) -> List[str]:
+    files: List[str] = []
+    seen: set[str] = set()
+
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = os.path.abspath(raw_path)
+        candidates: List[str] = []
+        if os.path.isdir(path):
+            candidates = find_docx_files(path, recursive=recursive)
+        elif is_docx(path):
+            candidates = [path]
+
+        for candidate in candidates:
+            normalized = os.path.abspath(candidate)
+            if normalized not in seen:
+                seen.add(normalized)
+                files.append(normalized)
+
+    return sorted(files)
+
+
+def determine_display_root(paths: Sequence[str]) -> Optional[str]:
+    if not paths:
+        return None
+    try:
+        return os.path.commonpath([os.path.dirname(os.path.abspath(path)) for path in paths])
+    except ValueError:
+        return None
+
+
+def default_gui_workers() -> int:
+    return max(1, min(4, os.cpu_count() or 1))
+
+
+def build_gui_config(
+    *,
+    root_dir: Optional[str] = None,
+    overwrite: bool,
+    backend: Literal["auto", "word", "libreoffice"],
+    workers: int,
+    bookmarks: Literal["headings", "word", "none"],
+    pdfa: bool,
+    validate_pdf: bool,
+    log_level: str,
+    log_file: Optional[str] = None,
+) -> ConversionConfig:
+    cfg = ConversionConfig(
+        root_dir=root_dir or ".",
+        overwrite=overwrite,
+        backend=backend,
+        workers=workers,
+        bookmarks=bookmarks,
+        pdfa=pdfa,
+        validate_pdf=validate_pdf,
+        log_level=log_level,
+        log_file=log_file,
+    )
+    cfg.validate()
+    return cfg
 
 
 # ============================================================================
@@ -574,8 +664,23 @@ def resolve_backend(config: ConversionConfig) -> Tuple[str, bool]:
     return backend, word_available
 
 
-def _log_result(res: ConversionResult, root: str, logger: logging.Logger) -> None:
-    rel_path = os.path.relpath(res.docx_path, root)
+def _format_display_path(path: str, root: Optional[str]) -> str:
+    if not root:
+        return os.path.basename(path)
+    try:
+        rel_path = os.path.relpath(path, root)
+    except ValueError:
+        return path
+    return rel_path if not rel_path.startswith("..") else path
+
+
+def _emit_progress(progress_callback: ProgressCallback, event: ConversionEvent) -> None:
+    if progress_callback is not None:
+        progress_callback(event)
+
+
+def _log_result(res: ConversionResult, root: Optional[str], logger: logging.Logger) -> None:
+    rel_path = _format_display_path(res.docx_path, root)
     if res.success:
         logger.info(f"OK   | {rel_path} ({res.backend_used})")
     else:
@@ -583,17 +688,37 @@ def _log_result(res: ConversionResult, root: str, logger: logging.Logger) -> Non
         logger.debug(res.traceback or "")
 
 
-def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> List[ConversionResult]:
+def convert_batch(
+    files: List[str],
+    config: ConversionConfig,
+    backend: str,
+    *,
+    progress_callback: ProgressCallback = None,
+    display_root: Optional[str] = None,
+) -> List[ConversionResult]:
     logger = get_logger()
     results: List[ConversionResult] = []
-    root = os.path.abspath(config.root_dir)
+    root = os.path.abspath(display_root or config.root_dir) if (display_root or config.root_dir) else None
+    processed = 0
+    total_files = len(files)
 
     tasks: List[Tuple[str, str]] = []
     for docx_path in files:
         pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
         if os.path.exists(pdf_path) and not config.overwrite:
-            rel_path = os.path.relpath(docx_path, root)
+            rel_path = _format_display_path(docx_path, root)
             logger.info(f"SKIP | {rel_path} (PDF already exists)")
+            processed += 1
+            _emit_progress(
+                progress_callback,
+                ConversionEvent(
+                    docx_path=docx_path,
+                    status="skipped",
+                    processed=processed,
+                    total=total_files,
+                    message="PDF already exists",
+                ),
+            )
             continue
         tasks.append((docx_path, pdf_path))
 
@@ -619,6 +744,18 @@ def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> L
                 res = fut.result()
                 results.append(res)
                 _log_result(res, root, logger)
+                processed += 1
+                _emit_progress(
+                    progress_callback,
+                    ConversionEvent(
+                        docx_path=res.docx_path,
+                        status="completed",
+                        processed=processed,
+                        total=total_files,
+                        message=res.error_message,
+                        result=res,
+                    ),
+                )
                 if pbar is not None:
                     pbar.update(1)
         if pbar is not None:
@@ -643,9 +780,30 @@ def convert_batch(files: List[str], config: ConversionConfig, backend: str) -> L
         iterator = pbar2
     try:
         for docx_path, pdf_path in iterator:
+            _emit_progress(
+                progress_callback,
+                ConversionEvent(
+                    docx_path=docx_path,
+                    status="started",
+                    processed=processed,
+                    total=total_files,
+                ),
+            )
             res = convert_single_file(docx_path, pdf_path, backend, config, word_app)
             results.append(res)
             _log_result(res, root, logger)
+            processed += 1
+            _emit_progress(
+                progress_callback,
+                ConversionEvent(
+                    docx_path=docx_path,
+                    status="completed",
+                    processed=processed,
+                    total=total_files,
+                    message=res.error_message,
+                    result=res,
+                ),
+            )
     finally:
         if pbar2 is not None:
             pbar2.close()
@@ -767,21 +925,23 @@ def build_config_from_args(args: argparse.Namespace) -> ConversionConfig:
     return cfg
 
 
-def run_conversion(config: ConversionConfig) -> Tuple[List[ConversionResult], str]:
+def _run_conversion_job(
+    files: List[str],
+    config: ConversionConfig,
+    *,
+    display_root: Optional[str],
+    source_label: Optional[Tuple[str, str]] = None,
+    progress_callback: ProgressCallback = None,
+) -> Tuple[List[ConversionResult], str]:
     logger = get_logger()
-
-    root = os.path.abspath(config.root_dir)
-    if not os.path.isdir(root):
-        raise FileNotFoundError(f"Directory not found: {root}")
-
-    files = find_docx_files(root, config.recursive)
     if not files:
         logger.warning("No DOCX files found")
         return [], config.backend
 
     backend, _ = resolve_backend(config)
 
-    logger.info(f"Root directory:     {root}")
+    if source_label is not None:
+        logger.info(f"{source_label[0]:<18} {source_label[1]}")
     logger.info(f"Recursive:          {config.recursive}")
     logger.info(f"Workers:            {config.workers}")
     logger.info(f"Backend:            {backend}")
@@ -789,7 +949,7 @@ def run_conversion(config: ConversionConfig) -> Tuple[List[ConversionResult], st
     logger.info(f"Files found:        {len(files)}")
 
     start = datetime.now()
-    results = convert_batch(files, config, backend)
+    results = convert_batch(files, config, backend, progress_callback=progress_callback, display_root=display_root)
     end = datetime.now()
 
     print_summary(results, backend)
@@ -803,101 +963,61 @@ def run_conversion(config: ConversionConfig) -> Tuple[List[ConversionResult], st
     return results, backend
 
 
+def run_conversion(config: ConversionConfig) -> Tuple[List[ConversionResult], str]:
+    root = os.path.abspath(config.root_dir)
+    if not os.path.isdir(root):
+        raise FileNotFoundError(f"Directory not found: {root}")
+
+    files = find_docx_files(root, config.recursive)
+    return _run_conversion_job(files, config, display_root=root, source_label=("Root directory:", root))
+
+
+def run_conversion_for_files(
+    files: Sequence[str],
+    config: ConversionConfig,
+    *,
+    progress_callback: ProgressCallback = None,
+) -> Tuple[List[ConversionResult], str]:
+    normalized: List[str] = []
+    seen: set[str] = set()
+
+    for path in files:
+        abs_path = os.path.abspath(path)
+        if not is_docx(abs_path):
+            continue
+        if abs_path not in seen:
+            seen.add(abs_path)
+            normalized.append(abs_path)
+
+    normalized.sort()
+    display_root = determine_display_root(normalized)
+    display_label = display_root if display_root is not None else "multiple locations"
+    return _run_conversion_job(
+        normalized,
+        config,
+        display_root=display_root,
+        source_label=("Input root:", display_label),
+        progress_callback=progress_callback,
+    )
+
+
 def run_gui_mode() -> int:
-    """
-    Double-click friendly mode.
-
-    If tkinter is available, show folder picker and two yes/no prompts.
-    If not available, fall back to minimal console prompts.
-    """
     try:
-        import tkinter as tk  # noqa: PLC0415
-        from tkinter import filedialog, messagebox  # noqa: PLC0415
-
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-
-        try:
-            folder = filedialog.askdirectory(title="Select folder containing DOCX files")
-            if not folder:
-                return 0
-
-            recursive = messagebox.askyesno("DOCX to PDF", "Search subfolders too?", default="yes")
-            overwrite = messagebox.askyesno("DOCX to PDF", "Overwrite existing PDFs?", default="no")
-
-            log_file = os.path.join(folder, "conversion.log")
-            cfg = ConversionConfig(
-                root_dir=folder,
-                recursive=bool(recursive),
-                overwrite=bool(overwrite),
-                backend="auto",
-                workers=min(4, os.cpu_count() or 4),
-                validate_pdf=True,
-                log_level="INFO",
-                log_file=log_file,
-            )
-            cfg.validate()
-
-            setup_logging(cfg.log_level, cfg.log_file)
-            get_logger().info("Running in double-click mode")
-
-            results, backend_used = run_conversion(cfg)
-            total = len(results)
-            ok = sum(1 for r in results if r.success)
-            fail = total - ok
-            messagebox.showinfo(
-                "DOCX to PDF",
-                f"Done.\nBackend: {backend_used}\nTotal: {total}\nOK: {ok}\nFAIL: {fail}\n\nLog: {log_file}",
-            )
-            return 0 if fail == 0 else 1
-        except Exception as e:
-            # Try to write details to the log if possible.
-            try:
-                get_logger().error(str(e))
-                get_logger().debug(traceback.format_exc())
-            except Exception:
-                pass
-            messagebox.showerror("DOCX to PDF", f"Error:\n{e}")
-            return 1
-        finally:
-            try:
-                root.destroy()
-            except Exception:
-                pass
-    except Exception:
-        # Console fallback (e.g. tkinter not installed/available)
-        print("DOCX to PDF (no GUI available).")
-        folder = input("Folder containing DOCX files (blank to cancel): ").strip()
-        if not folder:
-            return 0
-        recursive_in = input("Search subfolders too? [Y/n]: ").strip().lower()
-        recursive = recursive_in != "n"
-        overwrite_in = input("Overwrite existing PDFs? [y/N]: ").strip().lower()
-        overwrite = overwrite_in == "y"
-
-        log_file = os.path.join(folder, "conversion.log")
-        cfg = ConversionConfig(
-            root_dir=folder,
-            recursive=recursive,
-            overwrite=overwrite,
-            backend="auto",
-            workers=min(4, os.cpu_count() or 4),
-            validate_pdf=True,
-            log_level="INFO",
-            log_file=log_file,
+        from docx_to_pdf_gui import launch_gui  # noqa: PLC0415
+    except ImportError as e:
+        print(
+            "PySide6 GUI is not available. Install it with `pip install .[gui]` or run the CLI with arguments.",
+            file=sys.stderr,
         )
-        cfg.validate()
+        get_logger().debug(traceback.format_exc())
+        return 2
 
-        setup_logging(cfg.log_level, cfg.log_file)
-        get_logger().info("Running in double-click mode (console fallback)")
-
-        results, _ = run_conversion(cfg)
-        failures = sum(1 for r in results if not r.success)
-        return 0 if failures == 0 else 1
+    try:
+        return launch_gui()
+    except Exception as e:
+        print(f"Failed to start GUI: {e}", file=sys.stderr)
+        get_logger().debug(traceback.format_exc())
+        return 1
 
 
 def main(argv: Optional[List[str]] = None) -> int:

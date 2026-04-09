@@ -1,13 +1,15 @@
-Ecco uno script pronto che converte in PDF tutti i `.docx` nella cartella corrente (o in una cartella a scelta), creando i **segnalibri** dai titoli e riportando correttamente i **metadati** del documento.
+Strumento per convertire file `.docx` in PDF con due modalità:
 
-* Su **Windows** con **Microsoft Word** installato (via COM), ottieni la massima fedeltà: segnalibri da intestazioni o da bookmark Word e metadati inclusi nel PDF.
-* In assenza di Word, usa il **fallback LibreOffice** (`soffice`), e lo script inserisce i metadati nel PDF leggendo quelli del DOCX.
+* **CLI batch** su cartella (`--dir`), come prima.
+* **GUI PySide6** senza argomenti, con drag and drop di file e cartelle.
 
-### Uso rapido
+Su **Windows** con **Microsoft Word** installato (via COM) ottieni la massima fedeltà: segnalibri da intestazioni o bookmark Word e metadati inclusi nel PDF. In assenza di Word, viene usato il fallback **LibreOffice** (`soffice`), con iniezione dei metadati leggendo `docProps/core.xml` dal DOCX.
+
+### Uso rapido CLI
 
 ```bash
 # Converti tutti i .docx nella cartella corrente
-python docx_to_pdf.py --dir . 
+python docx_to_pdf.py --dir .
 
 # Ricorsivo su sottocartelle, sovrascrive PDF già esistenti
 python docx_to_pdf.py --dir . --recursive --overwrite
@@ -15,27 +17,45 @@ python docx_to_pdf.py --dir . --recursive --overwrite
 # Forza backend (auto | word | libreoffice)
 python docx_to_pdf.py --use word
 
-# Segnalibri: dai Titoli Word (default), dai bookmark Word o nessuno
-python docx_to_pdf.py --bookmarks headings   # headings | word | none
+# Segnalibri: headings | word | none
+python docx_to_pdf.py --bookmarks headings
 
 # Esporta in PDF/A-1 (solo backend Word/COM)
 python docx_to_pdf.py --pdfa
 ```
 
-### Modalità “doppio click” (senza argomenti)
+### GUI Drag and Drop
 
-Se avvii `docx_to_pdf.py` **senza argomenti** (es. doppio click da Esplora Risorse), lo script apre una finestra per scegliere la cartella e chiede solo 2 opzioni (ricorsivo / sovrascrivi). Il log viene scritto in `conversion.log` dentro la cartella scelta.
+Se avvii `docx_to_pdf.py` **senza argomenti**, si apre una GUI `PySide6` con:
+
+* area drag and drop per `.docx` e cartelle;
+* espansione cartelle solo al primo livello;
+* coda esplicita dei file da convertire;
+* opzioni base: `overwrite`, `backend`, `workers`;
+* opzioni avanzate: `bookmarks`, `pdfa`, `validate_pdf`, `log_level`;
+* log e progresso in tempo reale;
+* output PDF sempre accanto al file sorgente.
+
+La conversione parte solo con il pulsante `Converti`.
 
 ### Requisiti
 
+* **GUI**: `pip install .[gui]` oppure `pip install PySide6`
 * **Backend Word (consigliato)**: Windows + Microsoft Word + `pip install pywin32`
 * **Fallback LibreOffice**: avere `soffice` nel PATH
-* **Inserimento metadati lato fallback**: `pip install pypdf` (lo script legge i core properties da `docProps/core.xml` del DOCX)
+* **Inserimento metadati lato fallback**: `pip install pypdf`
+* **Build completa**: `pip install .[build]`
+
+### Build PyInstaller
+
+Lo `spec` genera due eseguibili:
+
+* `docx-to-pdf.exe` per uso console / scripting;
+* `docx-to-pdf-gui.exe` per uso finestrato senza terminale.
+
+Entrambi includono la GUI `PySide6` necessaria per la modalità senza argomenti.
 
 ### Note tecniche
 
-* Con **Word/COM** uso `ExportAsFixedFormat` con `IncludeDocProps=True` e `CreateBookmarks=Heading` (configurabile), così:
-
-  * i **segnalibri** derivano dagli *stili Titolo* (o da bookmark Word, se richiesto);
-  * i **metadati** (Titolo, Autore, Soggetto, Parole chiave) vengono riportati nel PDF.
-* Con **LibreOffice**, i segnalibri sono generalmente creati dagli stili di intestazione; dopo la conversione lo script **inietta i metadati** nel PDF leggendo i core properties del DOCX (Title, Author, Subject, Keywords).
+* Con **Word/COM** viene usato `ExportAsFixedFormat` con `IncludeDocProps=True` e `CreateBookmarks` configurabile, quindi segnalibri e metadati vengono preservati nel PDF.
+* Con **LibreOffice**, i segnalibri derivano in genere dagli stili di intestazione; dopo la conversione lo script inietta i metadati nel PDF leggendo le core properties del DOCX.

@@ -6,6 +6,9 @@ pywin32>=305; sys_platform == 'win32'
 # PDF manipulation and metadata injection (optional but recommended)
 pypdf>=3.17.0
 
+# GUI mode with drag and drop (optional)
+PySide6>=6.6
+
 # Progress bar visualization (optional but recommended)
 tqdm>=4.66.0
 

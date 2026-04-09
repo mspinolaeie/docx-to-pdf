@@ -24,7 +24,7 @@ _pywin32_hidden = [
     "win32con",
 ]
 
-_hidden = _pywin32_hidden + collect_submodules("pypdf")
+_hidden = _pywin32_hidden + ["docx_to_pdf_gui"] + collect_submodules("pypdf") + collect_submodules("PySide6")
 
 # ── Analysis (shared) ────────────────────────────────────────────────────────
 
