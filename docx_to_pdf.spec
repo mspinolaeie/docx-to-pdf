@@ -10,8 +10,6 @@
 #   pip install pyinstaller pyinstaller-hooks-contrib
 #   pyinstaller docx_to_pdf.spec --clean --noconfirm
 
-from PyInstaller.utils.hooks import collect_submodules
-
 # pywin32 COM dispatch loads modules at runtime; list them explicitly so
 # PyInstaller bundles the necessary pyd files.
 _pywin32_hidden = [
@@ -24,7 +22,10 @@ _pywin32_hidden = [
     "win32con",
 ]
 
-_hidden = _pywin32_hidden + ["docx_to_pdf_gui"] + collect_submodules("pypdf") + collect_submodules("PySide6")
+# Keep the GUI module visible to analysis even though it is imported lazily
+# from the no-args entrypoint. PyInstaller will analyze its real Qt imports
+# from there, which keeps the bundle much smaller than collecting all of PySide6.
+_hidden = _pywin32_hidden + ["docx_to_pdf_gui"]
 
 # ── Analysis (shared) ────────────────────────────────────────────────────────
 
