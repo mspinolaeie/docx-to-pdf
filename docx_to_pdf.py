@@ -858,9 +858,17 @@ Examples:
   python docx_to_pdf.py --dir . --recursive --workers 4
   python docx_to_pdf.py --config config.json --workers 8
   python docx_to_pdf.py --use word --bookmarks headings
+  python docx_to_pdf.py report.docx invoice.docx          (DnD / explicit files)
+  python docx_to_pdf.py C:\\docs\\folder report.docx        (mix of dirs and files)
         """,
     )
 
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        metavar="PATH",
+        help="DOCX files or folders to convert (drag-and-drop mode; takes precedence over --dir)",
+    )
     parser.add_argument("--config", help="Load configuration from JSON file")
     parser.add_argument("--save-config", help="Save resulting configuration to JSON file and exit")
 
@@ -1055,8 +1063,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     logger.info("DOCX to PDF Batch Converter")
     logger.info("=" * 60)
 
+    positional_paths: List[str] = getattr(args, "paths", [])
+
     try:
-        results, _ = run_conversion(cfg)
+        if positional_paths:
+            files = collect_docx_inputs(positional_paths, recursive=cfg.recursive)
+            results, _ = run_conversion_for_files(files, cfg)
+        else:
+            results, _ = run_conversion(cfg)
         failures = sum(1 for r in results if not r.success)
         return 0 if failures == 0 else 1
     except FileNotFoundError as e:
