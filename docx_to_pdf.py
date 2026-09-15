@@ -452,7 +452,7 @@ def is_word_available() -> bool:
     if not HAS_PYWIN32:
         return False
     try:
-        app = win32com.client.Dispatch("Word.Application")
+        app = win32com.client.DispatchEx("Word.Application")
         app.Quit()
         return True
     except Exception as e:
@@ -526,7 +526,7 @@ def convert_with_word(
     """Convert a single file, managing the Word application lifecycle."""
     word = None
     try:
-        word = win32com.client.Dispatch("Word.Application")
+        word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
         word.DisplayAlerts = 0
         _export_with_word_app(word, docx_path, pdf_path, create_bookmarks, optimize_for_print, pdfa)
@@ -766,7 +766,7 @@ def convert_batch(
     word_app = None
     if backend == "word" and HAS_PYWIN32:
         try:
-            word_app = win32com.client.Dispatch("Word.Application")
+            word_app = win32com.client.DispatchEx("Word.Application")
             word_app.Visible = False
             word_app.DisplayAlerts = 0
             logger.debug(f"Word.Application opened for batch of {len(tasks)} file(s)")

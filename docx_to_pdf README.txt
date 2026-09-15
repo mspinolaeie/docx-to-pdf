@@ -82,6 +82,17 @@ docx-to-pdf-drop.cmd
 docx_to_pdf.py
 ```
 
+### Menu contestuale Explorer (EIE tools)
+
+`install-context-menu.ps1` aggiunge al click destro sui `.docx` il sottomenu **EIE tools > docx2pdf** (per utente, senza admin), che lancia `docx-to-pdf-drop.cmd` sul file. La finestra si chiude da sola se la conversione riesce, resta aperta in caso di errore.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install-context-menu.ps1             # installa
+powershell -ExecutionPolicy Bypass -File install-context-menu.ps1 -Uninstall  # rimuove
+```
+
+Il comando registrato punta al percorso attuale del repo: se lo sposti, rilancia l'installazione. Su Windows 11 il sottomenu è sotto "Mostra altre opzioni".
+
 ### Build PyInstaller
 
 Lo `spec` genera due eseguibili:
