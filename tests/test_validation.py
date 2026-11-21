@@ -63,3 +63,20 @@ def test_valid_pdf_with_pypdf(tmp_path):
     ok, err = validate_pdf(pdf_path)
     assert ok is True
     assert err is None
+
+
+def test_non_pdf_large_file_without_pypdf(tmp_path, monkeypatch):
+    """Reject non-PDF output even if optional pypdf is unavailable."""
+    f = tmp_path / "not_pdf.pdf"
+    f.write_bytes(b"not a PDF" * 30)
+    real_import = builtins.__import__
+
+    def mock_import(name, *args, **kwargs):
+        if name == "pypdf":
+            raise ImportError("pypdf unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+    ok, err = validate_pdf(str(f))
+    assert ok is False
+    assert "header" in err.lower()

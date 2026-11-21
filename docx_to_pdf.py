@@ -425,6 +425,12 @@ def validate_pdf(pdf_path: str) -> Tuple[bool, Optional[str]]:
         if file_size < _MIN_PDF_BYTES:
             return False, f"File too small ({file_size} bytes, minimum {_MIN_PDF_BYTES})"
 
+        # Reject obvious non-PDF output even when optional pypdf is unavailable.
+        # The PDF header must occur within the first 1024 bytes.
+        with open(pdf_path, "rb") as pdf_file:
+            if b"%PDF-" not in pdf_file.read(1024):
+                return False, "Missing PDF header"
+
         try:
             from pypdf import PdfReader  # type: ignore
 
