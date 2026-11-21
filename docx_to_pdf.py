@@ -565,9 +565,11 @@ def convert_with_libreoffice(docx_path: str, pdf_path: str) -> None:
             )
 
         produced_pdf = os.path.join(outdir, os.path.splitext(os.path.basename(docx_path))[0] + ".pdf")
+        # A zero exit code does not guarantee that LibreOffice produced a PDF.
+        # Check even when the output already has the requested name.
+        if not os.path.isfile(produced_pdf):
+            raise RuntimeError(f"LibreOffice output not found: {produced_pdf}")
         if os.path.abspath(produced_pdf) != os.path.abspath(pdf_path):
-            if not os.path.exists(produced_pdf):
-                raise RuntimeError(f"LibreOffice output not found: {produced_pdf}")
             os.replace(produced_pdf, pdf_path)
         get_logger().debug(f"LibreOffice conversion completed: {pdf_path}")
     except subprocess.TimeoutExpired as e:
