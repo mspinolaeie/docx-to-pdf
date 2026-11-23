@@ -99,7 +99,7 @@ class ConversionConfig:
             raise ValueError(f"Invalid bookmarks: {self.bookmarks}")
         if self.backend not in {b.value for b in Backend}:
             raise ValueError(f"Invalid backend: {self.backend}")
-        if not isinstance(self.workers, int) or self.workers < 1:
+        if type(self.workers) is not int or self.workers < 1:
             raise ValueError("workers must be >= 1")
         if self.log_level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError(f"Invalid log_level: {self.log_level}")
